@@ -1,11 +1,21 @@
 -- [[ GUI LIBRARY LOAD ]]
 local NullLib = loadstring(game:HttpGet("https://raw.githubusercontent.com/ginzuss/nullui/refs/heads/main/NullUI.lua"))()
 
+-- [[ BRANDING ]]
+local TITLE_TEXT = "Flower dlc"
+local CREDITS_TEXT = "by Fluxx and Cherry"
+
+-- Custom title font (change TITLE_FONT_ASSET / TITLE_FONT_FALLBACK to restyle the name)
+local TITLE_FONT_ASSET = "rbxasset://fonts/families/GrenzeGotisch.json"
+local TITLE_FONT_FALLBACK = Enum.Font.GrenzeGotisch
+local TITLE_COLOR = Color3.fromRGB(255, 235, 245)
+local CREDITS_COLOR = Color3.fromRGB(255, 130, 200)
+
 local Window = NullLib:CreateWindow({
-    Name = "GithubProject",
-    Title = "Github Project",
-    Subtitle = "by Fluxx",
-    BadgeText = "v2.9",
+    Name = TITLE_TEXT,
+    Title = TITLE_TEXT,
+    Subtitle = CREDITS_TEXT,
+    BadgeText = "Release",
     Icon = "https://i.postimg.cc/QxPqrLGq/image-Photoroom.png",
     WatermarkIcon = "https://i.postimg.cc/QxPqrLGq/image-Photoroom.png",
     ToggleKey = Enum.KeyCode.LeftControl,
@@ -16,18 +26,87 @@ local Window = NullLib:CreateWindow({
     WelcomeNotification = true
 })
 
+-- [[ CUSTOM TITLE FONT & CREDITS STYLING ]]
+-- The UI library is packed, so the title font is re-skinned at runtime by
+-- locating the labels it created and swapping their FontFace.
+local TITLE_FONT_FACE = nil
+pcall(function()
+    TITLE_FONT_FACE = Font.new(TITLE_FONT_ASSET, Enum.FontWeight.Bold, Enum.FontStyle.Normal)
+end)
+
+local brandedLabels = setmetatable({}, { __mode = "k" })
+
+local function styleBrandLabel(label)
+    if brandedLabels[label] then return end
+    if not (label:IsA("TextLabel") or label:IsA("TextButton")) then return end
+
+    local text = label.Text
+    if text == TITLE_TEXT then
+        brandedLabels[label] = true
+        local applied = false
+        if TITLE_FONT_FACE then
+            applied = pcall(function() label.FontFace = TITLE_FONT_FACE end)
+        end
+        if not applied then
+            pcall(function() label.Font = TITLE_FONT_FALLBACK end)
+        end
+        pcall(function()
+            label.TextColor3 = TITLE_COLOR
+            label.TextSize = label.TextSize + 3
+        end)
+    elseif text == CREDITS_TEXT then
+        brandedLabels[label] = true
+        pcall(function()
+            label.Font = Enum.Font.GothamMedium
+            label.TextColor3 = CREDITS_COLOR
+        end)
+    end
+end
+
+local function getGuiRoots()
+    local roots = {}
+    pcall(function() if gethui then table.insert(roots, gethui()) end end)
+    pcall(function() table.insert(roots, game:GetService("CoreGui")) end)
+    pcall(function()
+        local plr = game:GetService("Players").LocalPlayer
+        table.insert(roots, plr:FindFirstChildOfClass("PlayerGui"))
+    end)
+    return roots
+end
+
+local function applyBranding()
+    for _, root in ipairs(getGuiRoots()) do
+        if root then
+            for _, obj in ipairs(root:GetDescendants()) do
+                pcall(styleBrandLabel, obj)
+            end
+        end
+    end
+end
+
+task.spawn(function()
+    for _ = 1, 12 do
+        pcall(applyBranding)
+        task.wait(0.25)
+    end
+end)
+
+for _, root in ipairs(getGuiRoots()) do
+    if root then
+        pcall(function()
+            root.DescendantAdded:Connect(function(obj)
+                task.defer(function() pcall(styleBrandLabel, obj) end)
+            end)
+        end)
+    end
+end
+
 -- Forward declaration of local functions to avoid scope issues
 local updateXrayTransparency
 local disableXray
 local setTime
 local saveSettings
 local loadSettings
-local equipGun
-local shootMurdererOnce
-local shootAtCursor
-local fireShot
-local findRemote
-local getGunFiredRemote
 local updateRadio
 local addTextboxToSection
 local localDupeItem
@@ -54,6 +133,11 @@ local antiFlingEnabled = false
 local walkSpeedValue = 16
 local jumpPowerValue = 50
 local MAX_DISTANCE = 500
+
+-- ESP appearance (fixed — only colors and max distance are user configurable)
+local espFillTransparency = 0.5
+local espOutlineTransparency = 0
+local espTextSize = 14
 
 -- ESP Colors definition to prevent nil indexing errors
 local COLORS = {
@@ -233,10 +317,45 @@ local function updateLanguageLabels()
     pcall(function() if labelDupeDesc then labelDupeDesc:Set(t.dupe_desc) end end)
 end
 
--- Shoot Murderer variables
-local shotType = "Default" -- "Default", "TP Bullet (Yoxi Hub)", "Teleport Player"
-local forceTarget = nil
-local forceHitPart = nil
+-- Combat module variables
+local KNIFE_NAME = "Knife"
+local magicBulletEnabled = false
+local silentPredictEnabled = false
+local killAuraEnabled = false
+local silentKnifeEnabled = false
+
+local MagicBulletConfig = {
+    TargetPos = nil,
+    TargetVelocity = Vector3.new(0, 0, 0),
+    PredictPowerX = 0.18,
+    PredictPowerY = 0.08,
+    PredictPowerZ = 0.18,
+    MaxVerticalOffset = 2.5
+}
+
+local SilentPredictConfig = {
+    TargetPos = nil,
+    TargetVelocity = Vector3.new(0, 0, 0),
+    PredictPowerX = 0.18,
+    PredictPowerY = 0.08,
+    PredictPowerZ = 0.18,
+    MaxVerticalOffset = 2.5
+}
+
+local KillAuraConfig = {
+    TargetPart = nil,
+    KillAuraRange = 200,
+    AttackSpeed = 0.1
+}
+
+local SilentKnifeConfig = {
+    TargetPos = nil
+}
+
+local KnifeRemotes = {
+    HandleTouched = nil,
+    KnifeStabbed = nil
+}
 
 -- Anti-AFK variable
 local antiAfkEnabled = false
@@ -268,7 +387,7 @@ local hudStrokes = {}
 local hudGlowColor = Color3.fromRGB(0, 255, 200)
 
 -- Config file path
-local CONFIG_FILE = "NullUI_MM2_Config.json"
+local CONFIG_FILE = "NullUI_FlowerDLC_Config.json"
 
 -- Safe file utility functions
 local function safeWriteFile(path, content)
@@ -1046,6 +1165,10 @@ task.spawn(function()
         if antiAfkEnabled then table.insert(activeList, "• Anti-AFK") end
         if spinBotEnabled then table.insert(activeList, "• Spin Bot") end
         if radioPlaying then table.insert(activeList, "• Visual Radio") end
+        if magicBulletEnabled then table.insert(activeList, "• Magic Bullet") end
+        if silentPredictEnabled then table.insert(activeList, "• Silent Predict") end
+        if killAuraEnabled then table.insert(activeList, "• Kill Aura") end
+        if silentKnifeEnabled then table.insert(activeList, "• Silent Knife") end
         
         if #activeList == 0 then
             activeLabel.Text = "• None"
@@ -1287,7 +1410,6 @@ local function updateESP()
                         if not highlight then
                             highlight = Instance.new("Highlight")
                             highlight.Name = "RoleESP"
-                            highlight.FillTransparency = 0.5
                             highlight.Parent = char
                         end
                         
@@ -1302,7 +1424,6 @@ local function updateESP()
                             textLabel = Instance.new("TextLabel")
                             textLabel.Size = UDim2.new(1, 0, 1, 0)
                             textLabel.BackgroundTransparency = 1
-                            textLabel.TextSize = 14
                             textLabel.Font = Enum.Font.GothamBold
                             textLabel.TextStrokeTransparency = 0
                             textLabel.Parent = billboard
@@ -1314,9 +1435,12 @@ local function updateESP()
                         highlight.Enabled = true
                         highlight.FillColor = color
                         highlight.OutlineColor = color
+                        highlight.FillTransparency = espFillTransparency
+                        highlight.OutlineTransparency = espOutlineTransparency
                         
                         billboard.Enabled = true
                         textLabel.TextColor3 = color
+                        textLabel.TextSize = espTextSize
                         textLabel.Text = string.format("%s (%s) [%dm]", player.DisplayName, role, distance)
                     else
                         if highlight then highlight:Destroy() end
@@ -1621,310 +1745,250 @@ steppedConnection = RS.Stepped:Connect(function()
     end
 end)
 
--- [[ OPTIMIZED SAFE NATIVE REMOTE SCANNER ]]
-findRemote = function(name)
-    local success, result = pcall(function()
-        local char = LocalPlayer.Character
-        if char then
-            local gun = char:FindFirstChild("Gun")
-            if gun then
-                local remote = gun:FindFirstChild(name, true) 
-                if remote and (remote:IsA("RemoteEvent") or remote:IsA("RemoteFunction")) then
-                    return remote
-                end
-            end
-        end
+-- [[ COMBAT MODULES (Magic Bullet / Silent / Kill Aura / Silent Knife) ]]
+local function combatHasKnife(player)
+    if not player then return false end
+    if player:FindFirstChild("Backpack") and player.Backpack:FindFirstChild(KNIFE_NAME) then return true end
+    if player.Character and player.Character:FindFirstChild(KNIFE_NAME) then return true end
+    return false
+end
 
-        local backpack = LocalPlayer:FindFirstChild("Backpack")
-        if backpack then
-            local gun = backpack:FindFirstChild("Gun")
-            if gun then
-                local remote = gun:FindFirstChild(name, true) 
-                if remote and (remote:IsA("RemoteEvent") or remote:IsA("RemoteFunction")) then
-                    return remote
-                end
-            end
-        end
+local function combatIsSurvivor(player)
+    if not player then return false end
+    if player:FindFirstChild("Backpack") and player.Backpack:FindFirstChild(KNIFE_NAME) then return false end
+    if player.Character and player.Character:FindFirstChild(KNIFE_NAME) then return false end
+    return true
+end
 
-        local rep = game:GetService("ReplicatedStorage")
-        local remote = rep:FindFirstChild(name, true)
-        if remote and (remote:IsA("RemoteEvent") or remote:IsA("RemoteFunction")) then
-            return remote
-        end
+local function checkRay(startPos, endPos, ignoredInstances)
+    local raycastParams = RaycastParams.new()
+    raycastParams.FilterDescendantsInstances = ignoredInstances
+    raycastParams.FilterType = Enum.RaycastFilterType.Exclude
+    raycastParams.IgnoreWater = true
 
-        local wRemote = Workspace:FindFirstChild(name, true)
-        if wRemote and (wRemote:IsA("RemoteEvent") or wRemote:IsA("RemoteFunction")) then
-            return wRemote
+    local result = Workspace:Raycast(startPos, endPos - startPos, raycastParams)
+    if result and result.Instance then
+        if result.Instance.Transparency >= 0.9 or not result.Instance.CanCollide then
+            return true
         end
-    end)
-    
-    if success and result then
-        return result
+        return false
     end
+    return true
+end
+
+local function isVisibleAdvanced(myRoot, character)
+    local head = character:FindFirstChild("Head")
+    local root = character:FindFirstChild("HumanoidRootPart")
+    local legs = character:FindFirstChild("LeftLeg") or character:FindFirstChild("LeftUpperLeg") or root
+
+    if not root then return nil end
+
+    local ignored = {LocalPlayer.Character, character}
+    if Workspace:FindFirstChild("InvisWalls") then table.insert(ignored, Workspace.InvisWalls) end
+    if Workspace:FindFirstChild("Ignore") then table.insert(ignored, Workspace.Ignore) end
+
+    local startPos = myRoot.Position
+    if head and checkRay(startPos, head.Position, ignored) then return head.Position end
+    if checkRay(startPos, root.Position, ignored) then return root.Position end
+    if legs and checkRay(startPos, legs.Position, ignored) then return root.Position end
     return nil
 end
 
-getGunFiredRemote = function()
-    local success, remote = pcall(function()
-        return game:GetService("ReplicatedStorage").ClientServices.WeaponService.GunFired
-    end)
-    if success and remote and (remote:IsA("RemoteEvent") or remote:IsA("RemoteFunction")) then
-        return remote
-    end
-    
-    return findRemote("GunFired") or findRemote("ShootGun") or findRemote("Shoot")
-end
+local function findClosestMurderer()
+    local closest, shortestDistance = nil, math.huge
+    local targetVelocity = Vector3.new(0, 0, 0)
+    local myChar = LocalPlayer.Character
 
--- [[ AUTO SHOOT MURDERER CORE LOGIC ]]
-equipGun = function()
-    local char = LocalPlayer.Character
-    if not char then return nil end
-    
-    local gun = char:FindFirstChild("Gun")
-    if gun then return gun end
-    
-    local backpack = LocalPlayer:FindFirstChild("Backpack")
-    local bGun = backpack and backpack:FindFirstChild("Gun")
-    if bGun then
-        local hum = char:FindFirstChildOfClass("Humanoid")
-        if hum then
-            hum:EquipTool(bGun)
-            local startTime = tick()
-            while tick() - startTime < 1 do
-                local equippedGun = char:FindFirstChild("Gun")
-                if equippedGun then
-                    return equippedGun
-                end
-                task.wait(0.05)
-            end
-        end
-    end
-    return char:FindFirstChild("Gun")
-end
-
-fireShot = function(gun, targetPart)
-    if not targetPart or not gun then return end
-    
-    local char = LocalPlayer.Character
-    local root = char and char:FindFirstChild("HumanoidRootPart")
-    if not root then return end
-    
-    forceTarget = targetPart.Position
-    forceHitPart = targetPart
-    
-    if shotType == "Teleport Player" then
-        local oldCFrame = root.CFrame
-        root.CFrame = targetPart.CFrame * CFrame.new(0, 4, 0)
-        task.wait(0.12) 
-        
-        pcall(function()
-            gun:Activate()
-        end)
-        
-        task.wait(0.08)
-        if root and root.Parent then
-            root.CFrame = oldCFrame
-        end
-    else
-        pcall(function()
-            gun:Activate()
-        end)
-    end
-    
-    task.spawn(function()
-        task.wait(0.25)
-        forceTarget = nil
-        forceHitPart = nil
-    end)
-end
-
-shootMurdererOnce = function()
-    local char = LocalPlayer.Character
-    if not char then return end
-    
-    local gun = equipGun()
-    if not gun then
-        sendNotification("Gun System", "You do not have the Gun in your Backpack!", 3)
-        return
-    end
-    
-    local handle = gun:FindFirstChild("Handle") or gun:FindFirstChildOfClass("Part") or gun:FindFirstChildOfClass("MeshPart")
-    if not handle then
-        sendNotification("Gun System", "Gun Handle not found!", 3)
-        return
-    end
-    
-    local gunFiredRemote = getGunFiredRemote()
-    if not gunFiredRemote then
-        sendNotification("Gun System", "GunFired / ShootGun Remote not found! Scan failed.", 3)
-        return
-    end
-    
-    local murderer = nil
-    for _, p in ipairs(Players:GetPlayers()) do
-        if p ~= LocalPlayer and getPlayerRole(p) == "Murderer" then
-            local mChar = p.Character
-            local mHum = mChar and mChar:FindFirstChildOfClass("Humanoid")
-            if mChar and mHum and mHum.Health > 0 then
-                murderer = p
-                break
-            end
-        end
-    end
-    
-    if murderer then
-        local targetPart = murderer.Character:FindFirstChild("Head") or murderer.Character:FindFirstChild("HumanoidRootPart")
-        if targetPart then
-            fireShot(gun, targetPart)
-            sendNotification("Gun System", "Fired shot at the murderer!", 3)
-        end
-    else
-        sendNotification("Gun System", "Murderer not found or dead!", 3)
-    end
-end
-
-shootAtCursor = function()
-    local char = LocalPlayer.Character
-    if not char then return end
-    
-    local gun = equipGun()
-    if not gun then
-        sendNotification("Gun System", "Equip the Gun manually first!", 3)
-        return
-    end
-    
-    local handle = gun:FindFirstChild("Handle") or gun:FindFirstChildOfClass("Part") or gun:FindFirstChildOfClass("MeshPart")
-    if not handle then
-        sendNotification("Gun System", "Gun Handle not found!", 3)
-        return
-    end
-    
-    local gunFiredRemote = getGunFiredRemote()
-    if not gunFiredRemote then
-        sendNotification("Gun System", "Remote not found!", 3)
-        return
-    end
-    
-    local mouse = LocalPlayer:GetMouse()
-    local targetPos = mouse.Hit.Position
-    local hitPart = mouse.Target or Workspace
-    
-    forceTarget = targetPos
-    forceHitPart = hitPart
-    
-    pcall(function()
-        gun:Activate()
-    end)
-    
-    task.spawn(function()
-        task.wait(0.2)
-        forceTarget = nil
-        forceHitPart = nil
-    end)
-    
-    sendNotification("Gun System", "Fired shot at cursor!", 3)
-end
-
--- [[ METATABLE HOOK BYPASS COUPLING ]]
-local mouse = LocalPlayer:GetMouse()
-
-local hasMouseHook = pcall(function()
-    assert(hookmetamethod, "Legacy Metatable Hooking not supported.")
-    local oldIndex
-    oldIndex = hookmetamethod(game, "__index", function(self, key)
-        if not checkcaller() and self == mouse then
-            if key == "Hit" and forceTarget then
-                return CFrame.new(forceTarget) 
-            elseif key == "Target" and forceHitPart then
-                return forceHitPart
-            end
-        end
-        return oldIndex(self, key)
-    end)
-end)
-
-if not hasMouseHook then
-    sendNotification("Warning", "Mouse Hooking not supported by this injector.", 5)
-end
-
-local hasHooks = pcall(function()
-    assert(hookfunction, "Your exploit does not support hookfunction.")
-    
-    local oldFireServer
-    oldFireServer = hookfunction(Instance.new("RemoteEvent").FireServer, function(self, ...)
-        local args = {...}
-        
-        if typeof(self) == "Instance" and self:IsA("RemoteEvent") then
-            if self.Name == "GunFired" then
-                if forceTarget and forceHitPart then
-                    args[1] = forceTarget 
-                    
-                    if shotType == "TP Bullet (Yoxi Hub)" then
-                        args[2] = forceTarget + Vector3.new(0, 1, 0)
-                    else
-                        local char = LocalPlayer.Character
-                        local head = char and char:FindFirstChild("Head")
-                        args[2] = head and head.Position or forceTarget
-                    end
-                    
-                    args[3] = forceHitPart 
-                    
-                    return oldFireServer(self, table.unpack(args))
-                end
-            elseif self.Name == "ShootGun" or self.Name == "Shoot" then
-                if forceTarget then
-                    args[1] = forceTarget
-                    return oldFireServer(self, table.unpack(args))
-                end
-            end
-        end
-        return oldFireServer(self, ...)
-    end)
-end)
-
-if not hasHooks then
-    sendNotification("Warning", "Network Hook Bypass failed. Fallback activated.", 5)
-    
-    pcall(function()
-        assert(hookmetamethod, "Legacy Hooking not supported.")
-        local oldNamecall
-        oldNamecall = hookmetamethod(game, "__namecall", function(self, ...)
-            local method = getnamecallmethod()
-            local args = {...}
-            
-            if not checkcaller() and typeof(self) == "Instance" then
-                if self:IsA("RemoteEvent") and self.Name == "GunFired" and method == "FireServer" then
-                    if forceTarget and forceHitPart then
-                        args[1] = forceTarget
-                        
-                        if shotType == "TP Bullet (Yoxi Hub)" then
-                            args[2] = forceTarget + Vector3.new(0, 1, 0)
-                        else
-                            local char = LocalPlayer.Character
-                            local head = char and char:FindFirstChild("Head")
-                            args[2] = head and head.Position or forceTarget
-                        end
-                        
-                        args[3] = forceHitPart
-                        
-                        return oldNamecall(self, table.unpack(args))
+    if myChar and myChar:FindFirstChild("HumanoidRootPart") then
+        for _, player in pairs(Players:GetPlayers()) do
+            if player ~= LocalPlayer and combatHasKnife(player) then
+                local char = player.Character
+                if char and char:FindFirstChild("HumanoidRootPart") and char:FindFirstChild("Humanoid") and char.Humanoid.Health > 0 then
+                    local bodyPart = char.HumanoidRootPart
+                    local distance = (bodyPart.Position - myChar.HumanoidRootPart.Position).Magnitude
+                    if distance < shortestDistance then
+                        shortestDistance = distance
+                        closest = bodyPart.Position
+                        targetVelocity = bodyPart.AssemblyLinearVelocity
                     end
                 end
             end
-            return oldNamecall(self, ...)
-        end)
-    end)
+        end
+    end
+
+    return closest, targetVelocity
 end
 
 task.spawn(function()
-    task.wait(1)
-    local foundRemote = getGunFiredRemote()
-    if foundRemote then
-        sendNotification("Debug Info", "Found remote at: " .. foundRemote:GetFullName(), 7)
-    else
-        sendNotification("Debug Info", "GunFired remote NOT found!", 7)
+    while scriptRunning do
+        task.wait(0.02)
+        if magicBulletEnabled or silentPredictEnabled then
+            local targetPos, targetVelocity = findClosestMurderer()
+            if magicBulletEnabled then
+                MagicBulletConfig.TargetPos = targetPos
+                MagicBulletConfig.TargetVelocity = targetVelocity
+            else
+                MagicBulletConfig.TargetPos = nil
+                MagicBulletConfig.TargetVelocity = Vector3.new(0, 0, 0)
+            end
+            if silentPredictEnabled then
+                SilentPredictConfig.TargetPos = targetPos
+                SilentPredictConfig.TargetVelocity = targetVelocity
+            else
+                SilentPredictConfig.TargetPos = nil
+                SilentPredictConfig.TargetVelocity = Vector3.new(0, 0, 0)
+            end
+        else
+            MagicBulletConfig.TargetPos = nil
+            MagicBulletConfig.TargetVelocity = Vector3.new(0, 0, 0)
+            SilentPredictConfig.TargetPos = nil
+            SilentPredictConfig.TargetVelocity = Vector3.new(0, 0, 0)
+        end
     end
 end)
+
+task.spawn(function()
+    while scriptRunning do
+        task.wait(0.05)
+        if killAuraEnabled then
+            local closest, shortestDistance = nil, math.huge
+            local myChar = LocalPlayer.Character
+
+            if myChar and myChar:FindFirstChild("HumanoidRootPart") then
+                local myRoot = myChar.HumanoidRootPart
+                for _, player in pairs(Players:GetPlayers()) do
+                    if player ~= LocalPlayer and combatIsSurvivor(player) then
+                        local char = player.Character
+                        if char and char:FindFirstChild("HumanoidRootPart") and char:FindFirstChild("Humanoid") and char.Humanoid.Health > 0 then
+                            local targetPart = char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Head")
+                            if targetPart then
+                                local distance = (targetPart.Position - myRoot.Position).Magnitude
+                                if distance < shortestDistance then
+                                    shortestDistance = distance
+                                    closest = targetPart
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+            KillAuraConfig.TargetPart = closest
+        else
+            KillAuraConfig.TargetPart = nil
+        end
+    end
+end)
+
+task.spawn(function()
+    while scriptRunning do
+        task.wait(0.05)
+        if silentKnifeEnabled then
+            local closestPos = nil
+            local shortestDistance = math.huge
+            local myChar = LocalPlayer.Character
+
+            if myChar and myChar:FindFirstChild("HumanoidRootPart") then
+                local myRoot = myChar.HumanoidRootPart
+                for _, player in pairs(Players:GetPlayers()) do
+                    if player ~= LocalPlayer and combatIsSurvivor(player) then
+                        local char = player.Character
+                        if char and char:FindFirstChild("HumanoidRootPart") and char:FindFirstChild("Humanoid") and char.Humanoid.Health > 0 then
+                            local targetPart = char.HumanoidRootPart
+                            local distance = (targetPart.Position - myRoot.Position).Magnitude
+                            if distance < shortestDistance then
+                                local visiblePos = isVisibleAdvanced(myRoot, char)
+                                if visiblePos then
+                                    shortestDistance = distance
+                                    closestPos = visiblePos
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+            SilentKnifeConfig.TargetPos = closestPos
+        else
+            SilentKnifeConfig.TargetPos = nil
+        end
+    end
+end)
+
+task.spawn(function()
+    while scriptRunning do
+        task.wait(KillAuraConfig.AttackSpeed)
+        if killAuraEnabled and KillAuraConfig.TargetPart and KnifeRemotes.HandleTouched and KnifeRemotes.KnifeStabbed then
+            local myChar = LocalPlayer.Character
+            if myChar and myChar:FindFirstChild("HumanoidRootPart") then
+                local distance = (KillAuraConfig.TargetPart.Position - myChar.HumanoidRootPart.Position).Magnitude
+                if distance <= KillAuraConfig.KillAuraRange then
+                    KnifeRemotes.HandleTouched:FireServer(KillAuraConfig.TargetPart)
+                    KnifeRemotes.KnifeStabbed:FireServer()
+                end
+            end
+        end
+    end
+end)
+
+local combatHookInstalled = pcall(function()
+    assert(hookmetamethod, "Combat hooking not supported.")
+    local oldNamecall
+    oldNamecall = hookmetamethod(game, "__namecall", function(self, ...)
+        local method = getnamecallmethod()
+
+        if method == "FireServer" then
+            local remoteName = tostring(self)
+            local arg1 = select(1, ...)
+            local arg2 = select(2, ...)
+
+            if remoteName == "Shoot" and typeof(arg1) == "CFrame" and typeof(arg2) == "CFrame" then
+                if magicBulletEnabled and MagicBulletConfig.TargetPos then
+                    local config = MagicBulletConfig
+                    local offsetX = config.TargetVelocity.X * config.PredictPowerX
+                    local offsetZ = config.TargetVelocity.Z * config.PredictPowerZ
+                    local offsetY = math.clamp(config.TargetVelocity.Y * config.PredictPowerY, -config.MaxVerticalOffset, config.MaxVerticalOffset)
+                    local predictedTargetPos = config.TargetPos + Vector3.new(offsetX, offsetY, offsetZ)
+                    local fakeOriginPos = predictedTargetPos - (arg1.LookVector * 2)
+                    local spoofedOriginCFrame = CFrame.new(fakeOriginPos) * arg1.Rotation
+                    local spoofedTargetCFrame = CFrame.new(predictedTargetPos) * arg2.Rotation
+                    return oldNamecall(self, spoofedOriginCFrame, spoofedTargetCFrame)
+                elseif silentPredictEnabled and SilentPredictConfig.TargetPos then
+                    local config = SilentPredictConfig
+                    local offsetX = config.TargetVelocity.X * config.PredictPowerX
+                    local offsetZ = config.TargetVelocity.Z * config.PredictPowerZ
+                    local offsetY = math.clamp(config.TargetVelocity.Y * config.PredictPowerY, -config.MaxVerticalOffset, config.MaxVerticalOffset)
+                    local predictedPos = config.TargetPos + Vector3.new(offsetX, offsetY, offsetZ)
+                    local spoofedCFrame = CFrame.new(predictedPos) * arg2.Rotation
+                    return oldNamecall(self, arg1, spoofedCFrame)
+                end
+            end
+
+            if killAuraEnabled then
+                if remoteName == "HandleTouched" then
+                    KnifeRemotes.HandleTouched = self
+                    if KillAuraConfig.TargetPart then
+                        return oldNamecall(self, KillAuraConfig.TargetPart)
+                    end
+                elseif remoteName == "KnifeStabbed" then
+                    KnifeRemotes.KnifeStabbed = self
+                    return oldNamecall(self, ...)
+                end
+            end
+
+            if silentKnifeEnabled and remoteName ~= "Shoot" and typeof(arg1) == "CFrame" and typeof(arg2) == "CFrame" then
+                if SilentKnifeConfig.TargetPos then
+                    local spoofedCFrame = CFrame.new(SilentKnifeConfig.TargetPos) * arg2.Rotation
+                    return oldNamecall(self, arg1, spoofedCFrame)
+                end
+            end
+        end
+
+        return oldNamecall(self, ...)
+    end)
+end)
+
+if not combatHookInstalled then
+    sendNotification("Warning", "Combat hooks not supported by this injector.", 5)
+end
 
 -- [[ CONFIGURATION PERSISTENCE LAYER ]]
 saveSettings = function()
@@ -1940,6 +2004,12 @@ saveSettings = function()
         antiFlingEnabled = antiFlingEnabled,
         MAX_DISTANCE = MAX_DISTANCE,
         
+        espColors = {
+            Murderer = {COLORS.Murderer.R, COLORS.Murderer.G, COLORS.Murderer.B},
+            Sheriff = {COLORS.Sheriff.R, COLORS.Sheriff.G, COLORS.Sheriff.B},
+            Innocent = {COLORS.Innocent.R, COLORS.Innocent.G, COLORS.Innocent.B}
+        },
+
         flyEnabled = flyEnabled,
         flySpeedValue = flySpeedValue,
         infiniteJumpEnabled = infiniteJumpEnabled,
@@ -1950,7 +2020,10 @@ saveSettings = function()
         radioVolume = radioVolume,
         radioPlaying = radioPlaying,
         
-        shotType = shotType,
+        magicBulletEnabled = magicBulletEnabled,
+        silentPredictEnabled = silentPredictEnabled,
+        killAuraEnabled = killAuraEnabled,
+        silentKnifeEnabled = silentKnifeEnabled,
         antiAfkEnabled = antiAfkEnabled,
         
         notifySheriffDeath = notifySheriffDeath,
@@ -2002,6 +2075,16 @@ loadSettings = function()
         if config.antiFlingEnabled ~= nil then setFeatureState("AntiFling", config.antiFlingEnabled) end
         if config.MAX_DISTANCE ~= nil then MAX_DISTANCE = config.MAX_DISTANCE end
         
+        if config.espColors ~= nil then
+            pcall(function()
+                for role, rgb in pairs(config.espColors) do
+                    if COLORS[role] and type(rgb) == "table" and #rgb == 3 then
+                        COLORS[role] = Color3.new(rgb[1], rgb[2], rgb[3])
+                    end
+                end
+            end)
+        end
+        
         if config.flyEnabled ~= nil then setFeatureState("Fly", config.flyEnabled) end
         if config.flySpeedValue ~= nil then flySpeedValue = config.flySpeedValue end
         if config.infiniteJumpEnabled ~= nil then setFeatureState("InfJump", config.infiniteJumpEnabled) end
@@ -2015,7 +2098,10 @@ loadSettings = function()
             updateRadio()
         end
         
-        if config.shotType ~= nil then shotType = config.shotType end
+        if config.magicBulletEnabled ~= nil then magicBulletEnabled = config.magicBulletEnabled end
+        if config.silentPredictEnabled ~= nil then silentPredictEnabled = config.silentPredictEnabled end
+        if config.killAuraEnabled ~= nil then killAuraEnabled = config.killAuraEnabled end
+        if config.silentKnifeEnabled ~= nil then silentKnifeEnabled = config.silentKnifeEnabled end
         if config.antiAfkEnabled ~= nil then setFeatureState("AntiAfk", config.antiAfkEnabled) end
         
         if config.notifySheriffDeath ~= nil then notifySheriffDeath = config.notifySheriffDeath end
@@ -2044,6 +2130,10 @@ loadSettings = function()
             updateToggleVisual(toggles.SpinBot, spinBotEnabled)
             updateToggleVisual(toggles.RadioPlay, radioPlaying)
             updateToggleVisual(toggles.AntiAfk, antiAfkEnabled)
+            updateToggleVisual(toggles.MagicBullet, magicBulletEnabled)
+            updateToggleVisual(toggles.SilentPredict, silentPredictEnabled)
+            updateToggleVisual(toggles.KillAura, killAuraEnabled)
+            updateToggleVisual(toggles.SilentKnife, silentKnifeEnabled)
             
             updateToggleVisual(toggles.NotifySheriff, notifySheriffDeath)
             updateToggleVisual(toggles.NotifyGunDrop, notifyGunDrop)
@@ -2072,9 +2162,11 @@ local HudTab = Window:CreateTab({ Name = "HUD Settings", Icon = "⚙️ " })
 local BindsTab = Window:CreateTab({ Name = "Keybinds", Icon = "⌨️ " })
 
 -- [[ MAIN TAB ]]
-local MainSection = MainTab:CreateSection({ Title = "Main Controls" })
-local ConfigSection = MainTab:CreateSection({ Title = "Config System" })
-local UnloadSection = MainTab:CreateSection({ Title = "Script Unload" })
+local MainSection = MainTab:CreateSection({ Title = "Main Controls", Side = "Left" })
+local ConfigSection = MainTab:CreateSection({ Title = "Config System", Side = "Right" })
+local UnloadSection = MainTab:CreateSection({ Title = "Script Unload", Side = "Left" })
+
+MainSection:AddLabel(CREDITS_TEXT)
 
 MainSection:AddDropdown({
     Text = "Language / Язык",
@@ -2126,7 +2218,15 @@ ConfigSection:AddButton({
         MAX_DISTANCE = 500
         flySpeedValue = 50
         spinBotSpeed = 100
-        shotType = "Default"
+        
+        COLORS.Murderer = Color3.fromRGB(255, 0, 0)
+        COLORS.Sheriff = Color3.fromRGB(0, 0, 255)
+        COLORS.Innocent = Color3.fromRGB(0, 255, 0)
+
+        magicBulletEnabled = false
+        silentPredictEnabled = false
+        killAuraEnabled = false
+        silentKnifeEnabled = false
         
         notifySheriffDeath = true
         notifyGunDrop = true
@@ -2148,6 +2248,10 @@ ConfigSection:AddButton({
             updateToggleVisual(toggles.ShowFeatures, false)
             updateToggleVisual(toggles.ShowRoundInfo, false)
             updateToggleVisual(toggles.RadioPlay, false)
+            updateToggleVisual(toggles.MagicBullet, false)
+            updateToggleVisual(toggles.SilentPredict, false)
+            updateToggleVisual(toggles.KillAura, false)
+            updateToggleVisual(toggles.SilentKnife, false)
         end)
         
         sendNotification("Config System", "Config has been reset!", 3)
@@ -2224,28 +2328,40 @@ UnloadSection:AddButton({
 labelUnload = UnloadSection:AddLabel(langData[currentLang].unload)
 
 -- [[ COMBAT TAB ]]
-local CombatSection = CombatTab:CreateSection({ Title = "Weapons & Target Assistance" })
+local SheriffSection = CombatTab:CreateSection({ Title = "Sheriff", Side = "Left" })
+local InnocentSection = CombatTab:CreateSection({ Title = "Innocent", Side = "Left" })
+local MurdererSection = CombatTab:CreateSection({ Title = "Murderer", Side = "Right" })
+local CombatUtilSection = CombatTab:CreateSection({ Title = "Utility", Side = "Right" })
 
-CombatSection:AddDropdown({
-    Text = "Shot Type",
-    Values = {"Default", "TP Bullet (Yoxi Hub)", "Teleport Player"},
-    Default = "Default",
-    Callback = function(v)
-        shotType = v
+toggles.MagicBullet = SheriffSection:AddToggle({
+    Text = "Magic Bullet",
+    Callback = function(state)
+        magicBulletEnabled = state
     end
 })
 
-CombatSection:AddButton({
-    Text = "Shoot Murderer Once",
-    Callback = shootMurdererOnce
+toggles.SilentPredict = SheriffSection:AddToggle({
+    Text = "Silent Predict",
+    Callback = function(state)
+        silentPredictEnabled = state
+    end
 })
 
-CombatSection:AddButton({
-    Text = "Shoot at Cursor (Test)",
-    Callback = shootAtCursor
+toggles.KillAura = MurdererSection:AddToggle({
+    Text = "Kill Aura",
+    Callback = function(state)
+        killAuraEnabled = state
+    end
 })
 
-toggles.AutoPickup = CombatSection:AddToggle({
+toggles.SilentKnife = MurdererSection:AddToggle({
+    Text = "Silent Knife",
+    Callback = function(state)
+        silentKnifeEnabled = state
+    end
+})
+
+toggles.AutoPickup = InnocentSection:AddToggle({
     Text = "Auto Pickup Gun",
     Flag = "AutoPickup",
     Callback = function(state) 
@@ -2253,8 +2369,8 @@ toggles.AutoPickup = CombatSection:AddToggle({
     end
 })
 
-toggles.AntiAfk = CombatSection:AddToggle({
-    Text = "Anti-AFK (Stay Online)",
+toggles.AntiAfk = CombatUtilSection:AddToggle({
+    Text = "Anti-AFK",
     Flag = "AntiAfk",
     Callback = function(state)
         setFeatureState("AntiAfk", state)
@@ -2262,7 +2378,8 @@ toggles.AntiAfk = CombatSection:AddToggle({
 })
 
 -- [[ DUPE TAB ]]
-local DupeSection = DupeTab:CreateSection({ Title = "Phantom Skin Duplicator" })
+local DupeSection = DupeTab:CreateSection({ Title = "Phantom Skin Duplicator", Side = "Left" })
+local DupeRunSection = DupeTab:CreateSection({ Title = "Duplication", Side = "Right" })
 labelDupeWarn = DupeSection:AddLabel(langData[currentLang].dupe_warn)
 
 DupeSection:AddDropdown({
@@ -2294,7 +2411,7 @@ weaponNameDropdown = DupeSection:AddDropdown({
     end
 })
 
-DupeSection:AddSlider({
+DupeRunSection:AddSlider({
     Text = "Quantity",
     Min = 1, Max = 100, Default = 1,
     Callback = function(v)
@@ -2302,13 +2419,13 @@ DupeSection:AddSlider({
     end
 })
 
-DupeSection:AddButton({
+DupeRunSection:AddButton({
     Text = "Dupe & Play Animation",
     Callback = function()
         playDupeAnimation(dupeWeaponName, dupeRarity, dupeWeaponType, dupeQuantity)
     end
 })
-labelDupeDesc = DupeSection:AddLabel(langData[currentLang].dupe_desc)
+labelDupeDesc = DupeRunSection:AddLabel(langData[currentLang].dupe_desc)
 
 -- [[ VISUALS TAB ]]
 local EspMainSection = VisualsTab:CreateSection({ Title = "ESP Settings", Side = "Left" })
@@ -2386,60 +2503,63 @@ toggles.NotifyGunPickup = NotificationSection:AddToggle({
 labelNotifications = NotificationSection:AddLabel(langData[currentLang].notifications)
 
 -- [[ MOVEMENT TAB ]]
-local MoveSection = MovementTab:CreateSection({ Title = "Character Customization" })
-MoveSection:AddSlider({ Text = "WalkSpeed", Min = 16, Max = 150, Default = 16, Callback = function(v) walkSpeedValue = v end })
-MoveSection:AddSlider({ Text = "JumpPower", Min = 50, Max = 250, Default = 50, Callback = function(v) jumpPowerValue = v end })
+local BaseMoveSection = MovementTab:CreateSection({ Title = "Basic Movement", Side = "Left" })
+local AdvancedMoveSection = MovementTab:CreateSection({ Title = "Advanced Features", Side = "Right" })
 
-toggles.NoClip = MoveSection:AddToggle({ 
+BaseMoveSection:AddSlider({ Text = "WalkSpeed", Min = 16, Max = 150, Default = 16, Callback = function(v) walkSpeedValue = v end })
+BaseMoveSection:AddSlider({ Text = "JumpPower", Min = 50, Max = 250, Default = 50, Callback = function(v) jumpPowerValue = v end })
+
+toggles.NoClip = BaseMoveSection:AddToggle({ 
     Text = "NoClip (Pass through walls)", 
     Callback = function(s) 
         setFeatureState("NoClip", s)
     end 
 })
 
-toggles.AntiFling = MoveSection:AddToggle({ 
+toggles.AntiFling = BaseMoveSection:AddToggle({ 
     Text = "Anti-Fling", 
     Callback = function(s) 
         setFeatureState("AntiFling", s)
     end 
 })
 
-toggles.Fly = MoveSection:AddToggle({
-    Text = "Fly Mode",
-    Callback = function(s)
-        setFeatureState("Fly", s)
-    end
-})
-
-MoveSection:AddSlider({
-    Text = "Fly Speed",
-    Min = 10, Max = 300, Default = 50,
-    Callback = function(v) flySpeedValue = v end
-})
-
-toggles.InfJump = MoveSection:AddToggle({
+toggles.InfJump = BaseMoveSection:AddToggle({
     Text = "Infinite Jump",
     Callback = function(s)
         setFeatureState("InfJump", s)
     end
 })
 
-toggles.SpinBot = MoveSection:AddToggle({
+toggles.Fly = AdvancedMoveSection:AddToggle({
+    Text = "Fly Mode",
+    Callback = function(s)
+        setFeatureState("Fly", s)
+    end
+})
+
+AdvancedMoveSection:AddSlider({
+    Text = "Fly Speed",
+    Min = 10, Max = 300, Default = 50,
+    Callback = function(v) flySpeedValue = v end
+})
+
+toggles.SpinBot = AdvancedMoveSection:AddToggle({
     Text = "Spin Bot",
     Callback = function(s)
         setFeatureState("SpinBot", s)
     end
 })
 
-MoveSection:AddSlider({
+AdvancedMoveSection:AddSlider({
     Text = "Spin Speed",
     Min = 10, Max = 500, Default = 100,
     Callback = function(v) spinBotSpeed = v end
 })
-labelMovement = MoveSection:AddLabel(langData[currentLang].movement)
+labelMovement = AdvancedMoveSection:AddLabel(langData[currentLang].movement)
 
 -- [[ RADIO TAB ]]
-local RadioSection = RadioTab:CreateSection({ Title = "Visual Radio (Local Sound)" })
+local RadioSection = RadioTab:CreateSection({ Title = "Visual Radio (Local Sound)", Side = "Left" })
+local RadioVolumeSection = RadioTab:CreateSection({ Title = "Sound", Side = "Right" })
 labelRadioWarn = RadioSection:AddLabel(langData[currentLang].radio_warn)
 
 toggles.RadioPlay = RadioSection:AddToggle({
@@ -2461,7 +2581,7 @@ addTextboxToSection(RadioSection, {
     end
 })
 
-RadioSection:AddSlider({
+RadioVolumeSection:AddSlider({
     Text = "Volume",
     Min = 0, Max = 100, Default = 50,
     Callback = function(val)
@@ -2471,10 +2591,11 @@ RadioSection:AddSlider({
         end
     end
 })
-labelRadioDesc = RadioSection:AddLabel(langData[currentLang].radio_desc)
+labelRadioDesc = RadioVolumeSection:AddLabel(langData[currentLang].radio_desc)
 
 -- [[ HUD SETTINGS TAB ]]
-local HudSection = HudTab:CreateSection({ Title = "HUD Panels Configuration" })
+local HudSection = HudTab:CreateSection({ Title = "HUD Panels Configuration", Side = "Left" })
+local HudStyleSection = HudTab:CreateSection({ Title = "Round Info & Style", Side = "Right" })
 
 toggles.ShowHud = HudSection:AddToggle({
     Text = "Show Main HUD Bar",
@@ -2492,15 +2613,15 @@ toggles.ShowFeatures = HudSection:AddToggle({
     end
 })
 
-toggles.ShowRoundInfo = HudSection:AddToggle({
+toggles.ShowRoundInfo = HudStyleSection:AddToggle({
     Text = "Show Round Info Panel",
-    Default = false, 
+    Default = false,
     Callback = function(state)
         mm2InfoFrame.Visible = state
     end
 })
 
-HudSection:AddColorPicker({
+HudStyleSection:AddColorPicker({
     Text = "HUD Neon Color",
     DefaultColor = Color3.fromRGB(0, 255, 200),
     Callback = function(color)
@@ -2509,7 +2630,8 @@ HudSection:AddColorPicker({
 })
 
 -- [[ KEYBINDS TAB ]]
-local BindsSection = BindsTab:CreateSection({ Title = "Hotkeys" })
+local BindsSection = BindsTab:CreateSection({ Title = "Hotkeys — General & Visuals", Side = "Left" })
+local BindsMoveSection = BindsTab:CreateSection({ Title = "Hotkeys — Movement", Side = "Right" })
 
 BindsSection:AddKeybind({ 
     Text = "Toggle Menu Bind", 
@@ -2553,8 +2675,8 @@ BindsSection:AddKeybind({
     end 
 })
 
-BindsSection:AddKeybind({ 
-    Text = "Anti-Fling Bind", 
+BindsMoveSection:AddKeybind({
+    Text = "Anti-Fling Bind",
     DefaultKey = Enum.KeyCode.Unknown, 
     Mode = "Toggle", 
     Callback = function(s) 
@@ -2562,8 +2684,8 @@ BindsSection:AddKeybind({
     end 
 })
 
-BindsSection:AddKeybind({ 
-    Text = "Force Night Bind", 
+BindsMoveSection:AddKeybind({
+    Text = "Force Night Bind",
     DefaultKey = Enum.KeyCode.Unknown, 
     Mode = "Toggle", 
     Callback = function(s) 
@@ -2571,8 +2693,8 @@ BindsSection:AddKeybind({
     end 
 })
 
-BindsSection:AddKeybind({ 
-    Text = "Fly Mode Bind", 
+BindsMoveSection:AddKeybind({
+    Text = "Fly Mode Bind",
     DefaultKey = Enum.KeyCode.Unknown, 
     Mode = "Toggle", 
     Callback = function(s) 
@@ -2580,8 +2702,8 @@ BindsSection:AddKeybind({
     end 
 })
 
-BindsSection:AddKeybind({ 
-    Text = "Infinite Jump Bind", 
+BindsMoveSection:AddKeybind({
+    Text = "Infinite Jump Bind",
     DefaultKey = Enum.KeyCode.Unknown, 
     Mode = "Toggle", 
     Callback = function(s) 
@@ -2595,28 +2717,6 @@ BindsSection:AddKeybind({
     Mode = "Toggle", 
     Callback = function(s) 
         setFeatureState("SpinBot", s)
-    end 
-})
-
-BindsSection:AddKeybind({ 
-    Text = "Shoot Murderer Once Bind", 
-    DefaultKey = Enum.KeyCode.Unknown, 
-    Mode = "Toggle", 
-    Callback = function(s) 
-        if s then
-            shootMurdererOnce()
-        end
-    end 
-})
-
-BindsSection:AddKeybind({ 
-    Text = "Shoot at Cursor Bind", 
-    DefaultKey = Enum.KeyCode.Unknown, 
-    Mode = "Toggle", 
-    Callback = function(s) 
-        if s then
-            shootAtCursor()
-        end
     end 
 })
 
